@@ -1,0 +1,76 @@
+{
+  "name": "Jira Proxy — Bot Discord (Exemplo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "jira-proxy",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ─── JIRA PROXY — Bot Discord ────────────────────────────────────────────────\n// Recebe chamadas do bot Discord e repassa para o Jira.\n// O bot usa este proxy porque chamadas diretas ao Jira apresentam timeout\n// em alguns ambientes de nuvem.\n//\n// PREENCHA AS CREDENCIAIS ABAIXO:\n// ────────────────────────────────────────────────────────────────────────────\n\nconst JIRA_DOMAIN  = 'sua-empresa.atlassian.net';\nconst JIRA_EMAIL   = 'seu@email.com';\nconst JIRA_TOKEN   = 'SEU_JIRA_TOKEN';\nconst JIRA_PROJECT = 'SCRUM';  // prefixo das issues (ex: SCRUM, DEV, API)\nconst JIRA_BOARD   = 1;        // ID do board\nconst JIRA_SPRINT_ID = 1;      // ID da sprint ativa\n\n// Confluence (opcional — para comandos /confluence, /user-stories etc.)\nconst CONFLUENCE_DOMAIN = 'sua-empresa.atlassian.net';\nconst CONFLUENCE_SPACE  = 'SEUSPACE';\n\n// ─── NÃO ALTERE ABAIXO DESTA LINHA ──────────────────────────────────────────\n\nconst jiraAuth    = 'Basic ' + Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');\nconst jiraHeaders = { 'Authorization': jiraAuth, 'Accept': 'application/json' };\n\nconst tipo  = $input.first().json.query?.tipo || '';\nconst extra = $input.first().json.query?.extra || '';\n\nconst jiraGet = async (url) => {\n  try {\n    const r = await this.helpers.httpRequest({\n      method: 'GET', url, headers: jiraHeaders,\n      returnFullResponse: true, ignoreHttpStatusErrors: true,\n    });\n    const body = typeof r.body === 'string' ? JSON.parse(r.body) : (r.body ?? r);\n    return body || {};\n  } catch(e) { return { __error: e.message }; }\n};\n\n// ─── ROTEAMENTO POR TIPO ─────────────────────────────────────────────────────\n\nif (tipo === 'sprint') {\n  const jql = encodeURIComponent(`project=${JIRA_PROJECT} AND sprint=${JIRA_SPRINT_ID} ORDER BY status ASC`);\n  const res = await jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/search?jql=${jql}&maxResults=100&fields=summary,status,assignee,labels,updated`);\n  return [{ json: { issues: res.issues || [] } }];\n}\n\nif (tipo === 'backlog') {\n  const jql = encodeURIComponent(`project=${JIRA_PROJECT} AND sprint is EMPTY AND issuetype=Story ORDER BY created DESC`);\n  const res = await jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/search?jql=${jql}&maxResults=50&fields=summary,issuetype`);\n  return [{ json: { issues: res.issues || [] } }];\n}\n\nif (tipo === 'semsprint') {\n  const jql = encodeURIComponent(`project=${JIRA_PROJECT} AND sprint is EMPTY ORDER BY created DESC`);\n  const res = await jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/search?jql=${jql}&maxResults=50&fields=summary,status,assignee`);\n  return [{ json: { issues: res.issues || [] } }];\n}\n\nif (tipo === 'devops') {\n  const jql = encodeURIComponent(`project=${JIRA_PROJECT} AND labels=devops ORDER BY status ASC`);\n  const res = await jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/search?jql=${jql}&maxResults=50&fields=summary,status,assignee,labels,updated`);\n  return [{ json: { issues: res.issues || [] } }];\n}\n\nif (tipo === 'changelog' && extra) {\n  const issueKey = extra.includes('-') ? extra : `${JIRA_PROJECT}-${extra}`;\n  const [issue, changelog] = await Promise.all([\n    jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}?fields=summary,status,assignee,created,updated`),\n    jiraGet(`https://${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/changelog?maxResults=50`),\n  ]);\n  return [{ json: { issue, changelog } }];\n}\n\n// Confluence — páginas de documentação\nif (tipo.startsWith('confluence-')) {\n  // Implemente conforme suas páginas do Confluence\n  // Retorne { markdown: '...', url: '...', version: N }\n  return [{ json: { __error: 'Confluence não configurado' } }];\n}\n\nreturn [{ json: { __error: `Tipo desconhecido: ${tipo}` } }];\n"
+      },
+      "id": "code-node",
+      "name": "Proxy Jira",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-node",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        700,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Proxy Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Proxy Jira": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
